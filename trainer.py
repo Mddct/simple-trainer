@@ -1,22 +1,16 @@
-import abc
-import os
 import time
-from contextlib import nullcontext
+from typing import List
 
 import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
-import torch.multiprocessing as mp
-import torch.nn as nn
 from torch.distributed.checkpoint.state_dict import (get_state_dict,
                                                      set_state_dict)
 from torch.distributed.checkpoint.stateful import Stateful
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
-from utils import if_print_model, init_distributed, wrap_cuda_model
+from utils import init_distributed, wrap_cuda_model
 from writer import create_default_writer
-
-import torch.distributed as dist
 
 
 class TrainState(Stateful):
@@ -28,21 +22,23 @@ class TrainState(Stateful):
     and optimizer.
     """
 
-    def __init__(self, model: torch.nn.Module, config, optimizer=None):
-        self.model = wrap_cuda_model(model, config)
-        self.optimizer = optimizer
+    def __init__(self, model, optimizer):
+        super().__init__()
+        self._model = model
+
+        self._optimizer = optimizer
         self._step = 0
 
     def state_dict(self):
         # this line automatically manages FSDP FQN's, as well as sets the default state dict type to FSDP.SHARDED_STATE_DICT
         model_state_dict, optimizer_state_dict = get_state_dict(
-            self.model, self.optimizer)
+            self._model, self._optimizer)
         return {"model": model_state_dict, "optim": optimizer_state_dict}
 
     def load_state_dict(self, state_dict):
         # sets our state dicts on the model and optimizer, now that we've loaded
-        set_state_dict(self.model,
-                       self.optimizer,
+        set_state_dict(self._model,
+                       self._optimizer,
                        model_state_dict=state_dict["model"],
                        optim_state_dict=state_dict["optim"])
 
@@ -59,11 +55,11 @@ class TrainState(Stateful):
         return self._step
 
     @classmethod
-    def reduce_train_metrics(self, metrics: dict):
+    def reduce_train_metrics(self, metrics: Listt):
         pass
 
     @classmethod
-    def reduce_eval_metrics(self, metrics: dict):
+    def reduce_eval_metrics(self, metrics: List):
         pass
 
     @property
@@ -86,16 +82,16 @@ class CheckpointManager:
     def save(self, model: TrainState):
 
         step = model.step
-        dir = f"{self.checkpoint_dir}/step_{step}"
+        save_dir = f"{self.checkpoint_dir}/step_{step}"
 
         state_dict = {self.collection: model}
         if self.async_checkpoint and self.checkpoint_future is not None:
             self.checkpoint_future.result()
         if self.async_checkpoint:
             self.checkpoint_future = dcp.async_save(state_dict,
-                                                    checkpoint_id=dir)
+                                                    checkpoint_id=save_dir)
         else:
-            dcp.save(state_dict, checkpoint_id=dir)
+            dcp.save(state_dict, checkpoint_id=save_dir)
 
     def restore(self, model: TrainState, checkpoint_dir):
         state_dict = {self.collection: model}
@@ -108,7 +104,8 @@ class Trainer:
                  config,
                  state: TrainState,
                  dataloader_or_dataset,
-                 eval_datalader_or_dataset=None):
+                 eval_datalader_or_dataset=None,
+                 checkpoint_manager=None):
         self.config = config
         self.world_size, self.rank, self.local_rank = init_distributed(config)
         self.writer = create_default_writer(config.tensorboard_dir,
@@ -119,14 +116,11 @@ class Trainer:
         if eval_datalader_or_dataset is not None:
             self.eval_iter = iter(eval_datalader_or_dataset)
         self.train_state = state
-        self.checkpoint_manager = CheckpointManager(
-            config.model_dir,
-            "model",
-            config.async_checkpoint,
-        )
+        self.checkpoint_manager = checkpoint_manager
 
     def train(self):
         if self.config.checkpoint_dir != '':
+            assert self.checkpoint_manager is not None
             self.checkpoint_manager.restore(self.train_state,
                                             self.config.checkpoint_dir)
         steps_offset = self.train_state.step
@@ -158,7 +152,7 @@ class Trainer:
             if (step + steps_offset + 1
                 ) % self.config.save_interval == 0 and steps_offset != 0 and (
                     step + 1) % self.config.accum_grad == 0:
-
+                assert self.checkpoint_manager is not None
                 self.checkpoint_manager.save(self.train_state)
                 dist.barrier()
 
@@ -168,9 +162,11 @@ class Trainer:
                 ) % self.config.accum_grad == 0 and self.eval_iter is not None:
                 eval_metrics_last = time.time()
                 self.train_state.model.eval()
+                eval_metrics = []
                 with torch.no_grad():
                     for (i, eval_batch) in enumerate(self.eval):
-                        eval_metrics = self.train_state.eval_step(batch)
+                        metrics = self.train_state.eval_step(eval_batch)
+                        eval_metrics.append(metrics)
                         if (i + 1) % self.config.log_interval == 0:
                             m = self.train_state.reduce_train_metrics(
                                 eval_metrics)
