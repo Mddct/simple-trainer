@@ -39,8 +39,10 @@ def get_config():
     config.accum_grad = 1
     config.grad_clip = 1
 
-    config.checkpoint = ''
+    config.checkpoint_dir = ''
     config.model_dir = ''
+    config.async_checkpoint = False
+
     config.tensorboard_dir = ''
     config.dist_backend = 'nccl'
 

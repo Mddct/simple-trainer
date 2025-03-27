@@ -1,23 +1,20 @@
 import abc
+import os
 import time
 from contextlib import nullcontext
 
 import torch
-
-from utils import init_distributed, if_print_model, wrap_cuda_model
-from writer import create_default_writer
-
-import os
-
-import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
-from torch.distributed.checkpoint.stateful import Stateful
-from torch.distributed.checkpoint.state_dict import get_state_dict, set_state_dict
 import torch.multiprocessing as mp
 import torch.nn as nn
-
+from torch.distributed.checkpoint.state_dict import (get_state_dict,
+                                                     set_state_dict)
+from torch.distributed.checkpoint.stateful import Stateful
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+
+from utils import if_print_model, init_distributed, wrap_cuda_model
+from writer import create_default_writer
 
 
 class TrainState(Stateful):
@@ -63,16 +60,37 @@ class TrainState(Stateful):
     def model(self):
         return self._model
 
-    def save(self, checkpoint_dir):
-        state_dict = {self.tag: self}
-        dcp.save(state_dict, checkpoint_id=checkpoint_dir)
-        
-    def restore(self, checkpoint_dir):
-        state_dict = {"F5": self}
-        dcp.load(
-            state_dict=state_dict,
-            checkpoint_id=checkpoint_dir,
-        )
+
+class CheckpointManager:
+
+    def __init__(self,
+                 checkpoint_dir,
+                 collection,
+                 async_checkpoint: bool = False,
+                 max_saves=None):
+        self.async_checkpoint = async_checkpoint
+        self.checkpoint_future = None
+        self.checkpoint_dir = checkpoint_dir
+        self.collection = collection
+
+    def save(self, model: TrainState):
+
+        step = model.step
+        dir = f"{self.checkpoint_dir}/step_{step}"
+
+        state_dict = {self.collection: model}
+        if self.async_checkpoint and self.checkpoint_future is not None:
+            self.checkpoint_future.result()
+        if self.async_checkpoint:
+            self.checkpoint_future = dcp.async_save(state_dict,
+                                                    checkpoint_id=dir)
+        else:
+            dcp.save(state_dict, checkpoint_id=dir)
+
+    def restore(self, model: TrainState, checkpoint_dir):
+        state_dict = {self.collection: model}
+        dcp.load(state_dict=state_dict, checkpoint_id=checkpoint_dir)
+
 
 class Trainer:
 
@@ -88,7 +106,7 @@ class Trainer:
             config,
             state.model,
         )
-        self.model  = wrap_cuda_model(self.train_state.model, config)
+        self.model = wrap_cuda_model(self.train_state.model, config)
 
         self.writer = create_default_writer(config.tensorboard_dir,
                                             just_logging=self.rank != 0,
@@ -97,12 +115,16 @@ class Trainer:
 
         self.train_state = state
 
-        # TODO: pytorch native dcp
-        self.checkpoint_manager = None
+        self.checkpoint_manager = CheckpointManager(
+            config.model_dir,
+            "model",
+            config.async_checkpoint,
+        )
 
     def train(self):
         if self.config.checkpoint_dir != '':
-            self.train_state.restore(self.config.checkpoint_dir)
+            self.checkpoint_manager.restore(self.train_state,
+                                            self.config.checkpoint_dir)
         steps_offset = self.train_state.step
         if steps_offset != 0:
             # TODO: skip first n in train iter
@@ -148,9 +170,9 @@ class Trainer:
                 ) % self.config.save_interval == 0 and steps_offset != 0 and (
                         step + 1) % self.config.accum_grad == 0:
                     import torch.distributed as dist
-                    self.train_state.save(self.config.model_dir)
+                    self.checkpoint_manager.save(self.train_state)
                     dist.barrier()
-                    
+
                 if (
                         step + steps_offset + 1
                 ) % self.config.eval_interval == 0 and steps_offset != 0 and (
@@ -159,3 +181,4 @@ class Trainer:
                     # import torch.distributed as dist
                     # self.train_state.save()
                     # dist.barrier()
+                    pass
