@@ -15,6 +15,7 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
 from utils import if_print_model, init_distributed, wrap_cuda_model
 from writer import create_default_writer
+
 import torch.distributed as dist
 
 
@@ -131,7 +132,7 @@ class Trainer:
         steps_offset = self.train_state.step
         if steps_offset != 0:
             # TODO: skip first n in train iter
-            return
+            pass
         train_metrics_last_t = time.time()
 
         train_metrics = []
