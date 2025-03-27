@@ -29,10 +29,9 @@ class TrainState(Stateful):
     and optimizer.
     """
 
-    def __init__(self, model, optimizer=None, tag='F5'):
+    def __init__(self, model, optimizer=None):
         self.model = model
         self.optimizer = optimizer
-        self.tag
         self._step = 0
 
     def state_dict(self):
@@ -68,13 +67,12 @@ class TrainState(Stateful):
         state_dict = {self.tag: self}
         dcp.save(state_dict, checkpoint_id=checkpoint_dir)
         
-    def restore(self, checkpoint_dir)
+    def restore(self, checkpoint_dir):
         state_dict = {"F5": self}
         dcp.load(
             state_dict=state_dict,
             checkpoint_id=checkpoint_dir,
         )
-        self._step = self.optimizer.s
 
 class Trainer:
 
