@@ -3,6 +3,12 @@ import ml_collections
 
 def get_config():
     config = ml_collections.ConfigDict()
+
+    # parallel
+    config.train_engine = 'torch_fsdp'  # [torch_ddp, torch_fsdp, deepspeed]
+    config.dcn_data_parallelism = -1  # nnodes in torch
+    config.icn_fsdp_parallelism = -1  # nproc in torch
+
     config.data_path = ''
     config.eval_data_path = ''
     config.batch_type = 'static'  # [static, bucket, dynamic]
@@ -34,7 +40,6 @@ def get_config():
     config.grad_clip = 1
 
     config.checkpoint = ''
-    config.train_engine = 'torch_ddp'  # [torch_ddp, torch_fsdp, deepspeed]
     config.model_dir = ''
     config.tensorboard_dir = ''
     config.dist_backend = 'nccl'
@@ -42,7 +47,9 @@ def get_config():
     # deepspeed
     config.deepspeed_config = ''
     config.deepspeed_save_states = ''
-    
-    config.precision = 'float32' # [float32, bfloat16, float16 ...]
 
+    config.precision = 'float32'  # [float32, bfloat16, float16 ...]
+
+    config.device = 'cuda'
+    config.fp16_grad_sync = False
     return config
