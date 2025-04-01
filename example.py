@@ -7,12 +7,12 @@ import torch
 from absl import app, flags
 from ml_collections import config_flags
 
-from writer import create_default_writer
+from simple_trainer.writer import create_default_writer
 
 FLAGS = flags.FLAGS
 
 _CONFIG = config_flags.DEFINE_config_file('config')
-from trainer import Trainer, TrainState
+from simple_trainer.trainer import Trainer, TrainState
 
 
 class DummyModel(torch.nn.Module):
