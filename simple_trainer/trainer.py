@@ -13,8 +13,8 @@ from torch.distributed.checkpoint.state_dict import (get_state_dict,
 from torch.distributed.checkpoint.stateful import Stateful
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
-from utils import if_print_model, init_distributed, wrap_cuda_model
-from writer import create_default_writer
+from simple_trainer.utils import if_print_model, init_distributed, wrap_cuda_model
+from simple_trainer.writer import create_default_writer
 
 import torch.distributed as dist
 
@@ -136,7 +136,6 @@ class Trainer:
         train_metrics_last_t = time.time()
 
         train_metrics = []
-
         self.train_state.model.train()
         for step, batch in zip(range(steps_offset, self.config.max_steps),
                                self.train_iter):
@@ -158,7 +157,6 @@ class Trainer:
             if (step + steps_offset + 1
                 ) % self.config.save_interval == 0 and steps_offset != 0 and (
                     step + 1) % self.config.accum_grad == 0:
-
                 self.checkpoint_manager.save(self.train_state)
                 dist.barrier()
 
